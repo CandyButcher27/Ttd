@@ -1,4 +1,5 @@
 import pandas as pd
+import os
 
 # Set Pandas to display all rows and columns
 pd.set_option('display.max_rows', None)  # Show all rows
@@ -8,6 +9,7 @@ pd.set_option('display.max_columns', None)  # Show all columns
 
 file_path_1 = "staff duties.xlsx"
 file_path_2 = "staff leave.xlsx"
+output_file_path = "final.xlsx"
 
 room_data = pd.read_excel(file_path_1, sheet_name="ROOM")
 staff_data = pd.read_excel(file_path_1, sheet_name="STAFF",header=None)
@@ -39,14 +41,12 @@ room_captains = merged_data[merged_data['Role']=="ROOM CAPTAIN"]
 group_captains = merged_data[merged_data['Role']=="GROUP CAPTAIN"]
 
 #Indexing Room and Group Captains according to their branch
-group_captains = group_captains.set_index("Branch")
-room_captains = room_captains.set_index("Branch") 
 
-group_captains = group_captains.sort_index()
-room_captains = room_captains.sort_index()  
 
 room_data = room_data.sort_values(by=["Room","Date","Period"])
 room_data = room_data.drop_duplicates()
+
+
 
 #Allotment Logic
 
@@ -58,6 +58,7 @@ group_captains['end_date'] = pd.to_datetime(group_captains['end_date'], format='
 def allot_room_captains(room_data, room_captains):
     room_data['Room Captain'] = None
     duties = {captain: [] for captain in room_captains['ID']}
+    branch_duty_count = {}
 
     for idx, row in room_data.iterrows():
         available_captains = room_captains[room_captains['end_date'].isna() | (room_captains['end_date'] != row['Date'])]
@@ -66,11 +67,21 @@ def allot_room_captains(room_data, room_captains):
         for _, captain_row in available_captains.iterrows():
             captain_id = captain_row['ID']
             captain_name = captain_row['Name']
-            if (len(duties[captain_id]) < 10 and
+            branch = captain_row['Branch']
+            
+            # Initialize branch count for the date if not present
+            if (row['Date'], branch) not in branch_duty_count:
+                branch_duty_count[(row['Date'], branch)] = 0
+            
+            # Check branch constraint
+            branch_total = len(room_captains[room_captains['Branch'] == branch])
+            if (branch_duty_count[(row['Date'], branch)] < branch_total // 2 and
+                len(duties[captain_id]) < 10 and
                 not any(duty_date == row['Date'] and duty_period != row['Period'] for duty_date, duty_period in duties[captain_id])):
 
                 assigned_captains.append(f"{captain_id} - {captain_name}")
                 duties[captain_id].append((row['Date'], row['Period']))
+                branch_duty_count[(row['Date'], branch)] += 1
 
                 if row['Room'] in ['F102', 'F105'] and len(assigned_captains) < 2:
                     continue
@@ -84,6 +95,54 @@ def allot_room_captains(room_data, room_captains):
 
     return room_data
 
+#Alloting Group Captains 
+
+def allot_group_captains(room_data, group_captains):
+    room_data['Group Captain'] = None
+    duties = {captain: [] for captain in group_captains['ID']}
+    branch_duty_count = {}
+
+    for floor in room_data['Floor'].unique():
+        floor_rooms = room_data[room_data['Floor'] == floor]
+
+        for idx, row in floor_rooms.iterrows():
+            available_captains = group_captains[group_captains['end_date'].isna() | (group_captains['end_date'] != row['Date'])]
+
+            for _, captain_row in available_captains.iterrows():
+                captain_id = captain_row['ID']
+                captain_name = captain_row['Name']
+                branch = captain_row['Branch']
+                
+                # Initialize branch count for the date if not present
+                if (row['Date'], branch) not in branch_duty_count:
+                    branch_duty_count[(row['Date'], branch)] = 0
+                
+                # Check branch constraint
+                branch_total = len(group_captains[group_captains['Branch'] == branch])
+                if (branch_duty_count[(row['Date'], branch)] < branch_total // 2 and
+                    len(duties[captain_id]) < 10 and
+                    not any(duty_date == row['Date'] and duty_period != row['Period'] for duty_date, duty_period in duties[captain_id])):
+
+                    room_data.at[idx, 'Group Captain'] = f"{captain_id} - {captain_name}"
+                    duties[captain_id].append((row['Date'], row['Period']))
+                    branch_duty_count[(row['Date'], branch)] += 1
+                    break
+
+    return room_data
+
 room_data = allot_room_captains(room_data, room_captains)
+room_data = allot_group_captains(room_data, group_captains)
 
+#Save the final Results
 
+# Save the final results
+if not os.path.exists(output_file_path):
+    with pd.ExcelWriter(output_file_path, engine="openpyxl") as writer:
+        room_data.to_excel(writer, sheet_name="FINAL", index=False)
+        
+else:
+    with pd.ExcelWriter(output_file_path, engine='openpyxl', mode='a', if_sheet_exists="replace") as writer:
+        room_data.to_excel(writer, sheet_name="FINAL", index=False)
+       
+
+print("Code Successfully Executed")
